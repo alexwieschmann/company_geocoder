@@ -23,13 +23,18 @@
 """
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtWidgets import QAction, QMessageBox
+
+from qgis.core import QgsPoint, QgsProject, QgsFeature, QgsGeometry
 
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
 from .company_geocoder_dialog import CompanyGeocoderDialog
 import os.path
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import geocoder
 
 
 class CompanyGeocoder:
@@ -189,12 +194,60 @@ class CompanyGeocoder:
             self.first_start = False
             self.dlg = CompanyGeocoderDialog()
 
+        # control if layer exists in project
+        mc = self.iface.mapCanvas()
+        layers = []
+        for layer in mc.layers():
+            layers.append(layer.name())
+        if not "firmen" in layers:
+            QMessageBox.critical(self.dlg, "Layer fehlt", "Layer Firmen nicht im Projekt")
+            return
+
         # show the dialog
         self.dlg.show()
         # Run the dialog event loop
         result = self.dlg.exec_()
         # See if OK was pressed
         if result:
-            # Do something useful here - delete the line containing pass and
-            # substitute with your code.
-            pass
+            # Get Values from imput dialog
+            firma = self.dlg.txtFirma.text()
+            adresse = self.dlg.txtAdresse.text()
+            PLZ = self.dlg.txtPLZ.text()
+            stadt = self.dlg.txtStadt.text()
+            anmerkungen = self.dlg.txtAnmerkungen.text()
+            missing_fields = []
+            if len(firma.strip()) == 0:
+                missing_fields.append("Firma")
+            if len(adresse.strip()) == 0:
+                missing_fields.append("Adresse")
+            if len(PLZ.strip()) == 0:
+                missing_fields.append("PLZ")
+            if len(stadt.strip()) == 0:
+                missing_fields.append("Stadt")
+            if len(anmerkungen.strip()) == 0:
+                missing_fields.append("Anmerkungen")
+            if missing_fields:
+                QMessageBox.critical(self.dlg, "Daten fehlen",
+                                     "Bitte die Spalten ausfüllen: {}".format(str(missing_fields)))
+                return
+
+            try:
+                g = geocoder.arcgis("{}, {} {}".format(adresse, PLZ, stadt))
+
+            except Exception as e:
+                QMessageBox.critical(self.dlg, "Fehler beim Geocodieren: {}".format(e)),
+
+            lyrFirmen = QgsProject.instance().mapLayersByName("firmen")[0]
+            fetFirmen = QgsFeature(lyrFirmen.fields())
+            fetFirmen.setAttribute("Firma", firma)
+            fetFirmen.setAttribute("Adresse", adresse)
+            fetFirmen.setAttribute("PLZ", PLZ)
+            fetFirmen.setAttribute("Stadt", stadt)
+            fetFirmen.setAttribute("Anmerkungen", anmerkungen)
+            point = QgsPoint(g.latlng[1], g.latlng[0])
+            print(g.latlng[1], g.latlng[0])
+            geom = QgsGeometry(point)
+            fetFirmen.setGeometry(geom)
+            pr = lyrFirmen.dataProvider()
+            pr.addFeatures([fetFirmen])
+            lyrFirmen.reload()
